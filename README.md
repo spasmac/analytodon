@@ -167,17 +167,17 @@ Analytodon runs as three Docker containers -- a **backend** API (NestJS), a **fr
 
 ### 🔑 Generate Secrets
 
-Generate three secrets before starting. The `ENCRYPTION_KEY` encrypts Mastodon OAuth tokens stored in the database -- it **must** be identical in the backend and CLI containers.
+Generate three secrets into the `.env` file before starting. The `ENCRYPTION_KEY` encrypts Mastodon OAuth tokens stored in the database -- it **must** be identical in the backend and CLI containers
 
 ```bash
 # ENCRYPTION_KEY — 64-character hex string (32 bytes for AES-256)
-openssl rand -hex 32
+echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env
 
 # JWT_SECRET — used by the backend to sign authentication tokens
-openssl rand -base64 48
+echo "JWT_SECRET=$(openssl rand -base64 48)" >> .env
 
 # SESSION_SECRET — used by the frontend to encrypt session cookies
-openssl rand -base64 48
+echo "SESSION_SECRET=$(openssl rand -base64 48)" >> .env
 ```
 
 > **Warning:** Never change `ENCRYPTION_KEY` after initial setup -- existing Mastodon tokens would become undecryptable.
@@ -208,8 +208,8 @@ services:
       - mongodb
     environment:
       DB_CLIENT_URL: mongodb://analytodon:<db-password>@mongodb:27017/analytodon?authSource=admin
-      ENCRYPTION_KEY: <your-encryption-key>
-      JWT_SECRET: <your-jwt-secret>
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: 1h
       JWT_REFRESH_TOKEN_EXPIRES_IN: 7d
       FRONTEND_URL: https://<your-domain>
@@ -236,7 +236,7 @@ services:
       - backend
     environment:
       API_URL: http://backend:3000
-      SESSION_SECRET: <your-session-secret>
+      SESSION_SECRET: ${SESSION_SECRET}
       MARKETING_URL: https://<your-domain>
       SUPPORT_EMAIL: <your-email>
 
@@ -250,7 +250,7 @@ services:
     environment:
       MONGODB_URI: mongodb://analytodon:<db-password>@mongodb:27017/analytodon?authSource=admin
       MONGODB_DATABASE: analytodon
-      ENCRYPTION_KEY: <your-encryption-key>
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       APP_URL: https://<your-domain>
       LOG_LEVEL: info
 
