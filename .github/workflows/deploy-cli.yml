@@ -1,56 +1,35 @@
-name: Deploy CLI
+name: Build CLI
 
 on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'apps/cli/**'
+      - 'packages/**'
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME_CLI: blazer82/analytodon-cli
+permissions:
+  contents: read
+  packages: write
 
 jobs:
-  build-and-push:
-    name: Build and push
+  build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Log in to container registry
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: "CLI: Build and push"
-        uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/docker/cli.Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_CLI }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_CLI }}:${{ github.sha }}
-
-  deploy:
-    name: Deploy
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-      - name: Set K8s context
-        uses: azure/k8s-set-context@v4
-        with:
-          kubeconfig: ${{ secrets.KUBECONFIG_OVH }}
-      - name: Deploy to the Kubernetes cluster
-        uses: azure/k8s-deploy@v5
-        with:
-          namespace: analytodon2
-          manifests: |
-            deploy/k8s/cli.yml
-          images: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_CLI }}:${{ github.sha }}
+          tags: ghcr.io/${{ github.repository_owner }}/analytodon-cli:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
