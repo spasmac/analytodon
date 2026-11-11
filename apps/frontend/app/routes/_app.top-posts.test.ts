@@ -1,12 +1,14 @@
 /* eslint-disable @typescript-eslint/no-unsafe-function-type */
 import { makeRequestWithSession, makeSessionUser } from '~/test-helpers';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   mockRequireUser: vi.fn(),
   mockResolveEffectiveAccountId: vi.fn(),
   mockTootsApi: {
     tootsControllerGetTopTootsSummary: vi.fn(),
+    tootsControllerGetPostActivity: vi.fn(),
+    tootsControllerGetPostingTimes: vi.fn(),
   },
   mockLogger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
 }));
@@ -46,8 +48,42 @@ function makeToot(id: string) {
   };
 }
 
+function makeActivity() {
+  return {
+    total: 3,
+    previousPeriodTotal: 2,
+    inProgress: false,
+    trend: 0.5,
+    bucket: 'day',
+    chart: [{ time: '2024-01-14', value: 3 }],
+    dateFrom: '2024-01-14',
+    dateTo: '2024-01-14',
+    days: 1,
+    daysWithoutPosts: 0,
+    busiestDay: { date: '2024-01-14', count: 3 },
+  };
+}
+
+const emptySummary = {
+  top: { data: [] },
+  topByReplies: { data: [] },
+  topByBoosts: { data: [] },
+  topByFavorites: { data: [] },
+};
+
+const postingTimesResponse = {
+  data: [{ weekday: 1, hour: 9, posts: 2, engagement: 12 }],
+  timezone: 'Europe/Berlin',
+  timeframe: 'last30days',
+};
+
 describe('top-posts loader', () => {
   const user = makeSessionUser();
+
+  beforeEach(() => {
+    mocks.mockTootsApi.tootsControllerGetPostActivity.mockResolvedValue(null);
+    mocks.mockTootsApi.tootsControllerGetPostingTimes.mockResolvedValue(postingTimesResponse);
+  });
 
   afterEach(() => {
     vi.clearAllMocks();
@@ -135,11 +171,15 @@ describe('top-posts loader', () => {
       topByReplies: [],
       topByBoosts: [],
       topByFavorites: [],
+      activity: null,
       initialTimeframe: 'last30days',
       initialDateFrom: null,
       initialDateTo: null,
       accountId: null,
+      postingTimes: null,
     });
+    expect(mocks.mockTootsApi.tootsControllerGetPostActivity).not.toHaveBeenCalled();
+    expect(mocks.mockTootsApi.tootsControllerGetPostingTimes).not.toHaveBeenCalled();
   });
 
   it('returns empty fallback on API failure', async () => {
@@ -156,11 +196,91 @@ describe('top-posts loader', () => {
       topByReplies: [],
       topByBoosts: [],
       topByFavorites: [],
+      activity: null,
       initialTimeframe: 'last30days',
       initialDateFrom: null,
       initialDateTo: null,
       accountId: 'acc-1',
+      postingTimes: null,
     });
     expect(mocks.mockLogger.error).toHaveBeenCalled();
+  });
+
+  it('loads post activity for the same timeframe', async () => {
+    mocks.mockRequireUser.mockResolvedValue(user);
+    mocks.mockResolveEffectiveAccountId.mockReturnValue('acc-1');
+    mocks.mockTootsApi.tootsControllerGetTopTootsSummary.mockResolvedValue(emptySummary);
+    const activity = makeActivity();
+    mocks.mockTootsApi.tootsControllerGetPostActivity.mockResolvedValue(activity);
+
+    const request = makeRequestWithSession(
+      'http://localhost/top-posts?timeframe=custom&dateFrom=2024-01-01&dateTo=2024-01-31',
+    );
+    const result = await callLoader(request);
+
+    expect(mocks.mockTootsApi.tootsControllerGetPostActivity).toHaveBeenCalledWith({
+      accountId: 'acc-1',
+      timeframe: 'custom',
+      dateFrom: '2024-01-01',
+      dateTo: '2024-01-31',
+    });
+    expect(result.activity).toEqual(activity);
+  });
+
+  it('keeps top posts when loading post activity fails', async () => {
+    mocks.mockRequireUser.mockResolvedValue(user);
+    mocks.mockResolveEffectiveAccountId.mockReturnValue('acc-1');
+    mocks.mockTootsApi.tootsControllerGetTopTootsSummary.mockResolvedValue({
+      ...emptySummary,
+      top: { data: [makeToot('1')] },
+    });
+    mocks.mockTootsApi.tootsControllerGetPostActivity.mockRejectedValue(new Error('API down'));
+
+    const request = makeRequestWithSession('http://localhost/top-posts');
+    const result = await callLoader(request);
+
+    expect(result.top).toHaveLength(1);
+    expect(result.activity).toBeNull();
+    expect(result.postingTimes).toEqual(postingTimesResponse);
+    expect(mocks.mockLogger.error).toHaveBeenCalledWith('Failed to load post activity:', expect.any(Error));
+  });
+
+  it('loads posting times for the same timeframe', async () => {
+    mocks.mockRequireUser.mockResolvedValue(user);
+    mocks.mockResolveEffectiveAccountId.mockReturnValue('acc-1');
+    mocks.mockTootsApi.tootsControllerGetTopTootsSummary.mockResolvedValue(emptySummary);
+
+    const request = makeRequestWithSession(
+      'http://localhost/top-posts?timeframe=custom&dateFrom=2024-01-01&dateTo=2024-01-31',
+    );
+    const result = await callLoader(request);
+
+    expect(result.postingTimes).toEqual(postingTimesResponse);
+    expect(mocks.mockTootsApi.tootsControllerGetPostingTimes).toHaveBeenCalledWith({
+      accountId: 'acc-1',
+      timeframe: 'custom',
+      dateFrom: '2024-01-01',
+      dateTo: '2024-01-31',
+    });
+  });
+
+  it('still returns top posts when loading posting times fails', async () => {
+    mocks.mockRequireUser.mockResolvedValue(user);
+    mocks.mockResolveEffectiveAccountId.mockReturnValue('acc-1');
+    mocks.mockTootsApi.tootsControllerGetTopTootsSummary.mockResolvedValue({
+      ...emptySummary,
+      top: { data: [makeToot('1')] },
+    });
+    const activity = makeActivity();
+    mocks.mockTootsApi.tootsControllerGetPostActivity.mockResolvedValue(activity);
+    mocks.mockTootsApi.tootsControllerGetPostingTimes.mockRejectedValue(new Error('API down'));
+
+    const request = makeRequestWithSession('http://localhost/top-posts');
+    const result = await callLoader(request);
+
+    expect(result.top).toHaveLength(1);
+    expect(result.postingTimes).toBeNull();
+    expect(result.activity).toEqual(activity);
+    expect(mocks.mockLogger.error).toHaveBeenCalledWith('Failed to load posting times:', expect.any(Error));
   });
 });

@@ -1,0 +1,20 @@
+{
+  "title": "Beiträge",
+  "previousPeriod": "vs. {{amount}} im vorherigen Zeitraum",
+  "previousPeriodSoFar": "vs. {{amount}} zum gleichen Zeitpunkt des vorherigen Zeitraums",
+  "facts": {
+    "perDay": "pro Tag",
+    "busiestDay": "aktivster Tag",
+    "busiestDayOn": "aktivster Tag ({{date}})",
+    "daysWithoutPosts": "Tage ohne Beiträge"
+  },
+  "chart": {
+    "title": {
+      "day": "Beiträge pro Tag",
+      "week": "Beiträge pro Woche",
+      "month": "Beiträge pro Monat"
+    },
+    "dataLabel": "Beiträge",
+    "weekOf": "Woche ab {{date}}"
+  }
+}

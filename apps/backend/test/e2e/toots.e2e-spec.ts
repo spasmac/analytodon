@@ -241,6 +241,211 @@ describe('TootsController (e2e)', () => {
     });
   });
 
+  describe('GET /accounts/:accountId/toots/activity', () => {
+    let otherAccount: AccountEntity;
+    let otherUserAccessToken: string;
+
+    beforeAll(async () => {
+      // A second user with their own account and posts in the same timeframe
+      const emFork = orm.em.fork();
+      const otherUser = await usersService.create({ ...testUserData, email: 'toots-e2e-other@example.com' });
+      otherUser.emailVerified = true;
+      await emFork.persistAndFlush(otherUser);
+      otherUserAccessToken = jwtService.sign(
+        { sub: otherUser.id, email: otherUser.email, role: otherUser.role },
+        {
+          secret: configService.get<string>(authConstants.JWT_SECRET_KEY, authConstants.JWT_DEFAULT_SECRET),
+          expiresIn: configService.get<StringValue>(
+            authConstants.JWT_EXPIRES_IN_KEY,
+            authConstants.JWT_DEFAULT_EXPIRES_IN,
+          ),
+        },
+      );
+
+      otherAccount = await accountsService.create(
+        { ...createAccountDto, name: 'Other Toots Account', serverURL: 'https://other.test' },
+        otherUser,
+      );
+      otherAccount.setupComplete = true;
+      await emFork.persistAndFlush(otherAccount);
+
+      const otherToots = [1, 2].map((daysAgo) =>
+        emFork.create(TootEntity, {
+          account: otherAccount,
+          uri: `tag:other.test,2023-01-01:other${daysAgo}`,
+          url: `https://other.test/users/other/statuses/${daysAgo}`,
+          content: 'Another account posting',
+          reblogsCount: 0,
+          favouritesCount: 0,
+          repliesCount: 0,
+          createdAt: new Date(new Date().setDate(new Date().getDate() - daysAgo)),
+          language: 'en',
+          visibility: 'public',
+          fetchedAt: new Date(),
+        }),
+      );
+      await emFork.persistAndFlush(otherToots);
+    });
+
+    it('should only count posts of the requested account', async () => {
+      const [own, other] = await Promise.all([
+        request(app.getHttpServer())
+          .get(`/accounts/${testAccount.id}/toots/activity?timeframe=last7days`)
+          .set('Authorization', `Bearer ${testUserAccessToken}`)
+          .expect(HttpStatus.OK),
+        request(app.getHttpServer())
+          .get(`/accounts/${otherAccount.id}/toots/activity?timeframe=last7days`)
+          .set('Authorization', `Bearer ${otherUserAccessToken}`)
+          .expect(HttpStatus.OK),
+      ]);
+
+      expect(own.body.total).toBe(4);
+      expect(other.body.total).toBe(2);
+    });
+
+    it("should return 404 for another user's account", async () => {
+      await request(app.getHttpServer())
+        .get(`/accounts/${otherAccount.id}/toots/activity?timeframe=last7days`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.NOT_FOUND);
+    });
+
+    it('should count posts per day for the timeframe', async () => {
+      const response = await request(app.getHttpServer())
+        .get(`/accounts/${testAccount.id}/toots/activity?timeframe=last7days`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.OK);
+
+      expect(response.body.total).toBe(4);
+      expect(response.body.bucket).toBe('day');
+      expect(response.body.days).toBe(7);
+      expect(response.body.chart).toHaveLength(7);
+      expect(response.body.chart.reduce((sum: number, point: { value: number }) => sum + point.value, 0)).toBe(4);
+      expect(response.body.daysWithoutPosts).toBe(3);
+      expect(response.body.busiestDay).toEqual({ date: expect.any(String), count: 1 });
+      expect(response.body.previousPeriodTotal).toBe(0);
+      expect(response.body.trend).toBeNull();
+      expect(response.body.inProgress).toBe(false);
+    });
+
+    it('should bucket a year-long custom range per month', async () => {
+      const response = await request(app.getHttpServer())
+        .get(`/accounts/${testAccount.id}/toots/activity?timeframe=custom&dateFrom=2025-01-01&dateTo=2025-12-31`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.OK);
+
+      expect(response.body.bucket).toBe('month');
+      expect(response.body.dateFrom).toBe('2025-01-01');
+      expect(response.body.dateTo).toBe('2025-12-31');
+      expect(response.body.chart).toHaveLength(12);
+      expect(response.body.chart[0]).toEqual({ time: '2025-01-01', value: 0 });
+      expect(response.body.total).toBe(0);
+      expect(response.body.busiestDay).toBeNull();
+    });
+
+    it('should return 400 if timeframe is missing', async () => {
+      await request(app.getHttpServer())
+        .get(`/accounts/${testAccount.id}/toots/activity`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.BAD_REQUEST);
+    });
+
+    it('should return 401 if not authenticated', async () => {
+      await request(app.getHttpServer())
+        .get(`/accounts/${testAccount.id}/toots/activity?timeframe=last7days`)
+        .expect(HttpStatus.UNAUTHORIZED);
+    });
+
+    it('should return 404 if account not found', async () => {
+      await request(app.getHttpServer())
+        .get(`/accounts/${new ObjectId().toHexString()}/toots/activity?timeframe=last7days`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.NOT_FOUND);
+    });
+  });
+
+  describe('GET /accounts/:accountId/toots/posting-times', () => {
+    // 2024-03-04 is a Monday. Europe/Berlin is on CET (UTC+1) during this week.
+    const makeToot = (
+      em: EntityManager,
+      id: string,
+      createdAt: string,
+      replies: number,
+      boosts: number,
+      favorites: number,
+    ) =>
+      em.create(TootEntity, {
+        account: testAccount,
+        uri: `tag:mastodon.test,2024:posting-times-${id}`,
+        url: `https://mastodon.test/users/testuser_toots/statuses/posting-times-${id}`,
+        content: `Posting times toot ${id}`,
+        repliesCount: replies,
+        reblogsCount: boosts,
+        favouritesCount: favorites,
+        createdAt: new Date(createdAt),
+        language: 'en',
+        visibility: 'public',
+        fetchedAt: new Date(),
+      });
+
+    beforeAll(async () => {
+      const emFork = orm.em.fork();
+      const toots = [
+        makeToot(emFork, 'mon-a', '2024-03-04T08:10:00.000Z', 1, 2, 3), // Mon 09:10 Berlin
+        makeToot(emFork, 'mon-b', '2024-03-04T08:50:00.000Z', 0, 1, 4), // Mon 09:50 Berlin
+        makeToot(emFork, 'sun', '2024-03-10T22:30:00.000Z', 2, 0, 0), // Sun 23:30 Berlin
+        makeToot(emFork, 'next-mon', '2024-03-10T23:30:00.000Z', 0, 0, 1), // Mon 00:30 Berlin (Sun 23:30 UTC)
+        makeToot(emFork, 'outside', '2024-03-20T12:00:00.000Z', 9, 9, 9), // outside the requested range
+      ];
+      await emFork.persistAndFlush(toots);
+    });
+
+    it('should aggregate posts and engagement by weekday and hour in the account timezone', async () => {
+      const response = await request(app.getHttpServer())
+        .get(`/accounts/${testAccount.id}/toots/posting-times?timeframe=custom&dateFrom=2024-03-04&dateTo=2024-03-11`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.OK);
+
+      expect(response.body.timezone).toBe('Europe/Berlin');
+      expect(response.body.timeframe).toBe('custom');
+      expect(response.body.data).toEqual([
+        { weekday: 1, hour: 0, posts: 1, engagement: 1 },
+        { weekday: 1, hour: 9, posts: 2, engagement: 11 },
+        { weekday: 7, hour: 23, posts: 1, engagement: 2 },
+      ]);
+    });
+
+    it('should return an empty list when there are no posts in the timeframe', async () => {
+      const response = await request(app.getHttpServer())
+        .get(`/accounts/${testAccount.id}/toots/posting-times?timeframe=custom&dateFrom=2023-06-01&dateTo=2023-06-30`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.OK);
+
+      expect(response.body.data).toEqual([]);
+      expect(response.body.timezone).toBe('Europe/Berlin');
+    });
+
+    it('should return 400 if timeframe is missing', async () => {
+      await request(app.getHttpServer())
+        .get(`/accounts/${testAccount.id}/toots/posting-times`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.BAD_REQUEST);
+    });
+
+    it('should return 401 if not authenticated', async () => {
+      await request(app.getHttpServer())
+        .get(`/accounts/${testAccount.id}/toots/posting-times?timeframe=last7days`)
+        .expect(HttpStatus.UNAUTHORIZED);
+    });
+
+    it('should return 404 if account not found', async () => {
+      await request(app.getHttpServer())
+        .get(`/accounts/${new ObjectId().toHexString()}/toots/posting-times?timeframe=last7days`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.NOT_FOUND);
+    });
+  });
+
   describe('GET /accounts/:accountId/toots/csv', () => {
     it('should download top posts as CSV with expected columns', async () => {
       const timeframe = 'last7days';
@@ -316,6 +521,20 @@ describe('TootsController (e2e)', () => {
     it('should return 404 for top-summary if account setup is not complete', async () => {
       await request(app.getHttpServer())
         .get(`/accounts/${incompleteAccount.id}/toots/top-summary?timeframe=last7days`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.NOT_FOUND);
+    });
+
+    it('should return 404 for activity if account setup is not complete', async () => {
+      await request(app.getHttpServer())
+        .get(`/accounts/${incompleteAccount.id}/toots/activity?timeframe=last7days`)
+        .set('Authorization', `Bearer ${testUserAccessToken}`)
+        .expect(HttpStatus.NOT_FOUND);
+    });
+
+    it('should return 404 for posting-times if account setup is not complete', async () => {
+      await request(app.getHttpServer())
+        .get(`/accounts/${incompleteAccount.id}/toots/posting-times?timeframe=last7days`)
         .set('Authorization', `Bearer ${testUserAccessToken}`)
         .expect(HttpStatus.NOT_FOUND);
     });

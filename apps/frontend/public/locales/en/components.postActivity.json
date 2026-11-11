@@ -1,0 +1,20 @@
+{
+  "title": "Posts",
+  "previousPeriod": "vs. {{amount}} in the previous period",
+  "previousPeriodSoFar": "vs. {{amount}} at the same point of the previous period",
+  "facts": {
+    "perDay": "per day",
+    "busiestDay": "busiest day",
+    "busiestDayOn": "busiest day ({{date}})",
+    "daysWithoutPosts": "days without posts"
+  },
+  "chart": {
+    "title": {
+      "day": "Posts per Day",
+      "week": "Posts per Week",
+      "month": "Posts per Month"
+    },
+    "dataLabel": "Posts",
+    "weekOf": "Week of {{date}}"
+  }
+}
